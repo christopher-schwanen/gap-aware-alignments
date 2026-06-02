@@ -27,7 +27,7 @@ random.seed(42)
 N_CPUS = cpu_count()
 N_WORKERS = min(N_CPUS - 2, 61)
 TIMEOUT = 65
-MAX_TRACE_VARIANTS = 1000
+MAX_TRACE_VARIANTS = 100000
 OFFSET = 0
 
 
@@ -114,6 +114,7 @@ def _run_block(pool: Pool,
                args_iter,
                output_path: Path,
                repeat: int = 10,
+               with_alignments: bool = False,
                ) -> None:
     """Submit one task per variant, collect best-of-repeat results, write to CSV.
 
@@ -130,13 +131,26 @@ def _run_block(pool: Pool,
                 runs = async_result.get(timeout=(repeat + 1) * TIMEOUT)  # additional timeout in case _timed_call itself gets stuck
                 if not runs:
                     raise TimeoutError
-                costs = [c for c, _ in runs]
-                if len(set(costs)) > 1:
-                    raise ValueError(f"Cost mismatch across repetitions for variant {variant}: {costs}")
-                """Write best-of-repeat result to CSV, or a timeout row if no run completed."""
-                writer.writerow([costs[0], min(t for _, t in runs), freq, len(variant), variant])
+                if with_alignments:
+                    cost_results = [r for r, _ in runs]
+                    costs = [c for c, _ in cost_results]
+                    alignments = [a for _, a in cost_results]
+                    times = [t for _, t in runs]
+                    if len(set(costs)) > 1:
+                        raise ValueError(f"Cost mismatch across repetitions for variant {variant}: {costs}")
+                    a = alignments[0]
+                    writer.writerow([costs[0], min(times), freq, len(variant), variant,
+                                     a[0]['alignment'], a[1]['alignment'], a[2]['alignment'], a[3]['alignment']])
+                else:
+                    costs = [c for c, _ in runs]
+                    if len(set(costs)) > 1:
+                        raise ValueError(f"Cost mismatch across repetitions for variant {variant}: {costs}")
+                    writer.writerow([costs[0], min(t for _, t in runs), freq, len(variant), variant])
             except TimeoutError:
-                writer.writerow(["timeout", "timeout", freq, len(variant), variant])
+                row = ["timeout", "timeout", freq, len(variant), variant]
+                if with_alignments:
+                    row += ["timeout"] * 4
+                writer.writerow(row)
             finally:
                 f.flush()
                 progress_bar.update()
@@ -175,7 +189,7 @@ def evaluate_event_log(event_log: Union[EventLog, 'pd.DataFrame'],
         args_iter = ((variant, freq, (trace, reachability_graph))
                      for variant, freq, trace in trace_variants)
         with Pool(processes=N_WORKERS) as pool:
-            _run_block(pool, evaluate_trace_gap_aware, args_iter, result_path / f"result{file_tag}_gap_aware_align.csv", repeat)
+            _run_block(pool, evaluate_trace_gap_aware, args_iter, result_path / f"result{file_tag}_gap_aware_align.csv", repeat, with_alignments=True)
 
     # PM4Py Alignments
     if include_pm4py_align:

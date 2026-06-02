@@ -33,7 +33,7 @@ class AffineGapCostModel(CostModel):
     def __call__(self, gap_length: int) -> float:
         if gap_length <= 0:
             return 0
-        return self.gap_opening_cost + (gap_length - 1) * self.gap_extension_cost
+        return self.gap_opening_cost + (gap_length) * self.gap_extension_cost
 
 
 class LogGapCostModel(CostModel):
@@ -152,8 +152,37 @@ class AlignmentStateGraph(nx.MultiDiGraph):
                 nx.dijkstra_path_length(self, self.initial_state, self.final_state, weight='log_gap_cost'),
                 nx.dijkstra_path_length(self, self.initial_state, self.final_state, weight='power_gap_cost'))
 
-    def get_optimal_alignments(self) -> tuple[AlignmentResult, AlignmentResult, AlignmentResult, AlignmentResult]:
-        raise NotImplementedError("Optimal alignment retrieval is not implemented yet.")
+    def _path_to_alignment(self, path: list, weight: str, cost: float) -> 'AlignmentResult':
+        moves = []
+        for u, v in nx.utils.pairwise(path):
+            if v == self.final_state:
+                continue
+            best_edge = min(self[u][v].values(), key=lambda e: e[weight])
+            if best_edge['type'] == 'sync':
+                log_label = best_edge['label']
+                firing_seq = best_edge['firing_sequence']
+                model_label = self.transition_labels.get(firing_seq[-1], firing_seq[-1])
+                moves.append((log_label, model_label))
+            else:  # gap
+                for log_label, firing_seq in zip(best_edge['label'], best_edge['firing_sequence']):
+                    if log_label is not None:
+                        moves.append((log_label, '>>'))
+                    else:
+                        model_label = self.transition_labels.get(firing_seq[-1], firing_seq[-1])
+                        moves.append(('>>',  model_label))
+        return {'alignment': moves, 'cost': cost}
+
+    def get_optimal_alignments(self) -> tuple['AlignmentResult', 'AlignmentResult', 'AlignmentResult', 'AlignmentResult']:
+        weights = ['classic_cost', 'affine_gap_cost', 'log_gap_cost', 'power_gap_cost']
+        costs = self.get_optimal_alignment_costs()
+        return tuple(
+            self._path_to_alignment(
+                nx.dijkstra_path(self, self.initial_state, self.final_state, weight=w),
+                w,
+                c,
+            )
+            for w, c in zip(weights, costs)
+        )
 
 
 def align(trace: Trace,
@@ -161,12 +190,11 @@ def align(trace: Trace,
           gap_opening_cost: float = 1,
           gap_extension_cost: float = 0.5,
           gap_power: float = 0.7,
-          ) -> tuple[float, float, float, float]:
+          ) -> tuple[tuple[float, float, float, float], tuple['AlignmentResult', 'AlignmentResult', 'AlignmentResult', 'AlignmentResult']]:
     affine_gap_cost_model = AffineGapCostModel(gap_opening_cost=gap_opening_cost, gap_extension_cost=gap_extension_cost)
     log_gap_cost_model = LogGapCostModel(gap_opening_cost=gap_opening_cost, gap_extension_cost=gap_extension_cost)
     power_gap_cost_model = PowerGapCostModel(gap_opening_cost=gap_opening_cost,
                                              gap_extension_cost=gap_extension_cost,
                                              power=gap_power)
-    return AlignmentStateGraph(
-        reachability_graph, trace, affine_gap_cost_model, log_gap_cost_model, power_gap_cost_model
-    ).get_optimal_alignment_costs()
+    graph = AlignmentStateGraph(reachability_graph, trace, affine_gap_cost_model, log_gap_cost_model, power_gap_cost_model)
+    return graph.get_optimal_alignment_costs(), graph.get_optimal_alignments()
