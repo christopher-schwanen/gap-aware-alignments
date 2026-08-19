@@ -1,54 +1,59 @@
+from __future__ import annotations
+
 import sys
 from datetime import datetime
 from pathlib import Path
 
-import pm4py
-
+from gap_aware_alignments import get_trace_variants, import_petri_net, read_event_log
 from evaluation import evaluate_event_log
 
+PN_TAGS = ["_pn30", "_pn50", "_pn70"]
+REPEAT = 5
 
-if __name__ == "__main__":
+
+def main() -> int:
     # Data path with input data (xes files)
     data_path = Path("data").resolve()
     # Output path to store the results
     result_path = Path("output") / datetime.now().strftime("%Y%m%d%H%M%S")
-    result_path.mkdir()
+    result_path.mkdir(parents=True)
 
-    for xes_file in data_path.glob("*.xes"):
+    for xes_file in sorted(data_path.glob("*.xes")):
         if not xes_file.is_file():
             continue
         cur_path = result_path / xes_file.stem
         cur_path.mkdir()
         print(f"{xes_file.stem}")
-        event_log = pm4py.read_xes(str(xes_file))
-        # Compute a list of benchmarks that we should execute
-        evaluate_event_logs = []
-        # Check if in data_path there is a file with the same name as the xes file but with the extension .ptml
+        print(" -> importing event log with Rust4PM ...")
+        event_log = read_event_log(xes_file)
+        trace_variants = get_trace_variants(event_log)
+        print(f" -> {len(trace_variants)} trace variants")
+
+        # Determine which Petri net(s) to evaluate against.
+        benchmarks: list[tuple[str, Path]] = []
         if (pnml_file := data_path / f"{xes_file.stem}.pnml").is_file():
-            accepting_petri_net = pm4py.read_pnml(str(pnml_file))
-            print(f" -> {pnml_file.stem}")
-            evaluate_event_logs.append({'event_log': event_log,
-                                        'accepting_petri_net': accepting_petri_net,
-                                        'repeat': 5,
-                                        'result_path': cur_path,
-                                        'file_tag': ""})
+            benchmarks.append(("", pnml_file))
         else:
-            for file_tag in ["_pn30", "_pn50", "_pn70"]:
-                if (pnml_file := data_path / f"{xes_file.stem}{file_tag}.pnml").is_file():
-                    accepting_petri_net = pm4py.read_pnml(str(pnml_file))
-                else:
-                    raise NotImplementedError()
-                    accepting_petri_net = ...
-                    pm4py.write_pnml(accepting_petri_net, str(data_path / f"{xes_file.stem}{file_tag}.pnml"))
-                print(f" -> {pnml_file.stem}")
-                evaluate_event_logs.append({'event_log': event_log,
-                                            'accepting_petri_net': accepting_petri_net,
-                                            'repeat': 5,
-                                            'result_path': cur_path,
-                                            'file_tag': file_tag})
+            for tag in PN_TAGS:
+                pnml_file = data_path / f"{xes_file.stem}{tag}.pnml"
+                if not pnml_file.is_file():
+                    raise FileNotFoundError(f"Expected Petri net not found: {pnml_file}")
+                benchmarks.append((tag, pnml_file))
 
-        # Evaluation:
-        for benchmark in evaluate_event_logs:
-            evaluate_event_log(**benchmark, include_pm4py_align=False)
+        for file_tag, pnml_file in benchmarks:
+            print(f" -> {pnml_file.stem} (Rust4PM PNML import)")
+            accepting_petri_net = import_petri_net(pnml_file)
+            evaluate_event_log(
+                trace_variants=trace_variants,
+                accepting_petri_net=accepting_petri_net,
+                repeat=REPEAT,
+                result_path=cur_path,
+                file_tag=file_tag,
+            )
 
-    sys.exit(0)
+    print(f"\nDone. Results in {result_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

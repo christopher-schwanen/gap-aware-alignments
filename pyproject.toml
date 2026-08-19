@@ -1,8 +1,10 @@
 [project]
-name = "gap-aware-alignments"
+name = "gap-aware-alignments-r4pm"
 version = "0.1.0"
-requires-python = ">=3.14"
+description = "Gap-aware trace-to-model alignments with Rust4PM (r4pm) Petri nets as input"
+requires-python = ">=3.10,<3.13"
 dependencies = [
-    "networkx>=3.6.1",
-    "pm4py>=2.7.22.3",
+    "r4pm>=0.6.0",
+    "polars>=1.0.0",
+    "networkx>=3.0",
 ]
